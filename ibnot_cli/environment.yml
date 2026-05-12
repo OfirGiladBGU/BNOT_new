@@ -10,3 +10,6 @@ dependencies:
   - gmp
   - mpfr
   - patchelf
+  - numpy
+  - pillow
+  - tqdm
