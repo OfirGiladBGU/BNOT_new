@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """BNOT dataset generator.
 
-Reads images from <data_path>/original/, prepares source/ and target/ outputs,
+Reads images from <data_path>/source/, generates target/ outputs,
 and writes prompt.json JSONL entries.
 
-This follows the same idea as the quickstart notebook, but runs locally on a
-folder of input images instead of downloading any URL examples.
+Requires a source/ folder with input images. Does not use original/ fallback.
 """
 
 from __future__ import annotations
@@ -98,6 +97,46 @@ def save_target_png_from_points(points: np.ndarray, out_path: Path, width: int, 
 	out_path.parent.mkdir(parents=True, exist_ok=True)
 	Image.fromarray(canvas, mode="L").save(out_path)
 
+def try_recover_from_crash(
+	target_out_dir: Path,
+	stem: str,
+	width: int,
+	height: int,
+) -> tuple[bool, str]:
+	"""
+	Attempt to recover from a BNOT crash by using partial .dat file if it exists.
+	If no partial data, skip the image.
+	Returns (success: bool, recovery_type: str).
+	"""
+	dat_path = target_out_dir / f"{stem}.dat"
+	target_png = target_out_dir / f"{stem}.png"
+
+	# Try to use partial .dat file
+	if dat_path.exists():
+		try:
+			points = load_points(dat_path)
+			if points.shape[0] > 0:
+				# Rasterize whatever points we have
+				save_target_png_from_points(points, target_png, width=width, height=height)
+
+				# Cleanup .dat and stats files
+				try:
+					dat_path.unlink()
+				except Exception:
+					pass
+				try:
+					stats_path = target_out_dir / f"{stem}.txt"
+					if stats_path.exists():
+						stats_path.unlink()
+				except Exception:
+					pass
+
+				return True, "partial_data"
+		except Exception:
+			pass
+
+	# No usable partial data; skip this image.
+	return False, "failed"
 
 def _write_pgm(path: Path, array: np.ndarray) -> None:
 	# Write ASCII P2 PGM (matches wrapper behavior)
@@ -285,11 +324,11 @@ def main() -> int:
 	executable = None
 
 	parser = argparse.ArgumentParser(
-		description="Generate BNOT source/target pairs from images under original/",
+		description="Generate BNOT source/target pairs from images under source/",
 		formatter_class=argparse.ArgumentDefaultsHelpFormatter,
 	)
 	parser.add_argument("--data_path", type=Path, default=data_path,
-						help="Dataset root containing an original/ folder")
+						help="Dataset root containing a source/ folder")
 	parser.add_argument("--n", type=int, default=n, help="Number of images to process; -1 means all")
 	parser.add_argument("--image_size", type=int, nargs=2, default=image_size,
 						metavar=("W", "H"), help="Resize images before inference; default keeps original size")
@@ -311,15 +350,14 @@ def main() -> int:
 	args = parser.parse_args()
 
 	data_path = args.data_path.expanduser().resolve()
-	original_dir = data_path / "original"
 	source_dir = data_path / "source"
 	target_dir = data_path / "target"
 	json_path = data_path / "prompt.json"
 	timestamps_dir = data_path / "timestamps" if args.track_time else None
 
-	# Require at least one of original/ or source/ to exist.
-	if not original_dir.is_dir() and not source_dir.is_dir():
-		print(f"Error: neither 'original/' nor 'source/' folder found under: {data_path}", file=sys.stderr)
+	# Require source/ to exist.
+	if not source_dir.is_dir():
+		print(f"Error: 'source/' folder not found under: {data_path}", file=sys.stderr)
 		return 1
 
 	source_dir.mkdir(parents=True, exist_ok=True)
@@ -336,29 +374,12 @@ def main() -> int:
 
 	executable = find_default_executable(args.executable)
 
-	# Prefer images already placed in `source/` if present — do not modify
-	# those originals. Otherwise fall back to `original/` and copy files into
-	# `source/` as needed.
-	source_images = []
-	if source_dir.is_dir():
-		source_images = sorted(
-			[p.relative_to(source_dir) for p in source_dir.rglob("*") if p.is_file() and p.suffix.lower() in VALID_EXT]
-		)
-
-	if source_images:
-		image_files = source_images
-		input_from_source = True
-	else:
-		image_files = sorted(
-			[
-				p.relative_to(original_dir)
-				for p in original_dir.rglob("*")
-				if p.is_file() and p.suffix.lower() in VALID_EXT
-			]
-		)
-		input_from_source = False
+	# Read images from source/ directory only (no fallback to original/).
+	image_files = sorted(
+		[p.relative_to(source_dir) for p in source_dir.rglob("*") if p.is_file() and p.suffix.lower() in VALID_EXT]
+	)
 	if not image_files:
-		print(f"No images found under: {original_dir}", file=sys.stderr)
+		print(f"No images found under: {source_dir}", file=sys.stderr)
 		return 1
 
 	n = len(image_files) if args.n == -1 else min(args.n, len(image_files))
@@ -372,8 +393,8 @@ def main() -> int:
 	processed = 0
 	skipped = 0
 
-	for rel_path in tqdm(image_files[:n], desc="BNOT images"):
-		src_path = (source_dir if input_from_source else original_dir) / rel_path
+	for idx, rel_path in enumerate(tqdm(image_files[:n], desc="BNOT images"), 1):
+		src_path = source_dir / rel_path
 		source_out = source_dir / rel_path.with_suffix(".png")
 		target_out_dir = target_dir / rel_path.parent
 		target_out_dir.mkdir(parents=True, exist_ok=True)
@@ -388,30 +409,62 @@ def main() -> int:
 
 		target_png = target_out_dir / f"{rel_path.stem}.png"
 		if not args.overwrite and source_out.exists() and target_png.exists():
+			print(f"  [{idx}/{n}] Skipping {rel_path.name}: already processed")
 			skipped += 1
 			continue
 
-		status = process_one(
-			src_path,
-			source_out,
-			target_out_dir,
-			executable=executable,
-			image_size=tuple(args.image_size) if args.image_size is not None else None,
-			invert=args.invert,
-			num_sites=args.num_sites,
-			seed=args.seed,
-			max_iters=args.max_iters,
-			max_newton_iters=args.max_newton_iters,
-			keep_pgm=args.keep_pgm,
-			keep_stats=args.keep_stats,
-			track_time=args.track_time,
-			timestamps_dir=timestamps_dir,
-			rel_path=rel_path,
-		)
-		if status == "processed":
-			processed += 1
-		else:
-			skipped += 1
+		print(f"  [{idx}/{n}] Processing {rel_path.name}")
+		try:
+			status = process_one(
+				src_path,
+				source_out,
+				target_out_dir,
+				executable=executable,
+				image_size=tuple(args.image_size) if args.image_size is not None else None,
+				invert=args.invert,
+				num_sites=args.num_sites,
+				seed=args.seed,
+				max_iters=args.max_iters,
+				max_newton_iters=args.max_newton_iters,
+				keep_pgm=args.keep_pgm,
+				keep_stats=args.keep_stats,
+				track_time=args.track_time,
+				timestamps_dir=timestamps_dir,
+				rel_path=rel_path,
+			)
+			if status == "processed":
+				processed += 1
+			else:
+				skipped += 1
+		except Exception as crash_error:
+			# Attempt to recover using partial .dat file only; otherwise skip.
+			print(f"    ⚠ Error processing {rel_path.name}: {crash_error}")
+			
+			# Infer dimensions from source image
+			try:
+				with Image.open(source_out) as src_img:
+					width, height = src_img.size
+			except Exception:
+				print(f"    ✗ Could not determine image dimensions, skipping")
+				skipped += 1
+				continue
+			
+			# Try to recover using partial .dat only
+			recovered, recovery_type = try_recover_from_crash(
+				target_out_dir,
+				rel_path.stem,
+				width=width,
+				height=height,
+			)
+			
+			if recovered:
+				if recovery_type == "partial_data":
+					print(f"    ✓ Recovered using partial data ({rel_path.stem})")
+				processed += 1
+			else:
+				print(f"    ✗ Skipped {rel_path.name} (recovery failed)")
+				skipped += 1
+			continue
 
 	json_path.parent.mkdir(parents=True, exist_ok=True)
 	with json_path.open("w", encoding="utf-8") as handle:
