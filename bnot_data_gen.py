@@ -17,8 +17,17 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
-from tqdm import tqdm
 import shutil
+
+# Ensure prints flush immediately for real-time logging in pipelines and
+# background runs. Prefer line-buffering when available, otherwise
+# fall back to binding `print` with `flush=True`.
+try:
+	sys.stdout.reconfigure(line_buffering=True)
+	sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+	import functools
+	print = functools.partial(print, flush=True)
 
 REPO_ROOT = Path(__file__).resolve().parent
 PYTHON_SRC = REPO_ROOT / "python" / "src"
@@ -301,18 +310,32 @@ def process_one(
 
 
 def main() -> int:
-	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/monkey"
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/monkey"
+	# num_sites = 1024
 
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/quadratic_V2"
+	# num_sites = 1024
 
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/plant2"
+	# num_sites = 1024
 
 	# ICONS
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/quantitative_advance_metrics"
-	
+	# num_sites = 1024
+
+	# Faces Set Sample
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/faces_results_compare"
+	# num_sites = 1024
+
+	# ICONS - TIMES
+	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
+	# num_sites = 576
+	# num_sites = 1024
+	num_sites = 2304
+
 	n = -1
 	image_size = None
-	num_sites = 1024
+	# num_sites = 1024
 	seed = 7
 	max_iters = 25
 	max_newton_iters = 50
@@ -349,11 +372,18 @@ def main() -> int:
 
 	args = parser.parse_args()
 
+	# NOTE: Build paths
 	data_path = args.data_path.expanduser().resolve()
-	source_dir = data_path / "source"
-	target_dir = data_path / "target"
-	json_path = data_path / "prompt.json"
-	timestamps_dir = data_path / "timestamps" if args.track_time else None
+	SOURCE_PATH = os.path.join(data_path, "source")
+	TARGET_PATH = os.path.join(data_path, "target")
+	JSON_PATH = os.path.join(data_path, "prompt.json")
+	TIMESTAMPS_PATH = os.path.join(data_path, "timestamps") if args.track_time else None
+
+	data_path = args.data_path.expanduser().resolve()
+	source_dir = Path(SOURCE_PATH)
+	target_dir = Path(TARGET_PATH)
+	json_path = Path(JSON_PATH)
+	timestamps_dir = Path(TIMESTAMPS_PATH) if TIMESTAMPS_PATH else None
 
 	# Require source/ to exist.
 	if not source_dir.is_dir():
@@ -393,7 +423,7 @@ def main() -> int:
 	processed = 0
 	skipped = 0
 
-	for idx, rel_path in enumerate(tqdm(image_files[:n], desc="BNOT images"), 1):
+	for idx, rel_path in enumerate(image_files[:n], 1):
 		src_path = source_dir / rel_path
 		source_out = source_dir / rel_path.with_suffix(".png")
 		target_out_dir = target_dir / rel_path.parent
