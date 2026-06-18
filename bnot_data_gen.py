@@ -327,11 +327,27 @@ def main() -> int:
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/faces_results_compare"
 	# num_sites = 1024
 
-	# ICONS - TIMES
-	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
+	# ICONS - TIMES - V1
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
 	# num_sites = 576
 	# num_sites = 1024
-	num_sites = 2304
+	# num_sites = 2304
+
+	# ICONS - TIMES - V2
+	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
+	num_sites = 256  # 16
+	# num_sites = 576  # 24 
+	# num_sites = 1024  # 32
+	# num_sites = 1600  # 40
+	# num_sites = 2304  # 48
+	# num_sites = 3136  # 56
+	# num_sites = 4096  # 64
+	# num_sites = 5184  # 72
+	# num_sites = 6400  # 80
+	# num_sites = 7744  # 88
+	# num_sites = 9216  # 96
+	# num_sites = 10816  # 104
+	# num_sites = 12544  # 112
 
 	n = -1
 	image_size = None
