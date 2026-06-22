@@ -310,6 +310,25 @@ def process_one(
 
 
 def main() -> int:
+	# Defaults #
+	data_path = None
+	n = -1
+	image_size = None
+	num_sites = 1024
+	seed = 7
+	max_iters = 25
+	max_newton_iters = 50
+	invert = True
+	keep_pgm = False
+	keep_stats = True
+	track_time = True
+	overwrite = False
+	executable = None
+
+	############################
+	# CONFIGURATION PARAMETERS #
+	############################
+
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/monkey"
 	# num_sites = 1024
 
@@ -332,6 +351,7 @@ def main() -> int:
 	# num_sites = 576
 	# num_sites = 1024
 	# num_sites = 2304
+	# image_size = (512, 512)
 
 	# ICONS - TIMES - V2
 	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
@@ -348,19 +368,7 @@ def main() -> int:
 	# num_sites = 9216  # 96
 	# num_sites = 10816  # 104
 	# num_sites = 12544  # 112
-
-	n = -1
-	image_size = None
-	# num_sites = 1024
-	seed = 7
-	max_iters = 25
-	max_newton_iters = 50
-	invert = True
-	keep_pgm = False
-	keep_stats = True
-	track_time = True
-	overwrite = False
-	executable = None
+	image_size = (512, 512)
 
 	parser = argparse.ArgumentParser(
 		description="Generate BNOT source/target pairs from images under source/",

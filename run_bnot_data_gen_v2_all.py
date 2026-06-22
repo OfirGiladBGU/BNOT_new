@@ -3,6 +3,9 @@
 
 After each run, the output subfolders (target, timestamps) are renamed
 with a _BNOT_<NUM_SITES> postfix. source/ is left untouched.
+
+All run parameters are passed explicitly on the command line so this driver
+does not depend on the defaults inside bnot_data_gen.py.
 """
 
 import subprocess
@@ -17,6 +20,19 @@ DATA_PATH = Path(
     "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion"
     "/experiments/outputs/icons_results_runtimes"
 )
+
+# Full ICONS - TIMES - V2 parameter set (passed explicitly; do not assume the
+# underlying script defaults).
+N = -1                  # -1 == process all images
+IMAGE_SIZE = (512, 512)
+SEED = 7
+MAX_ITERS = 25
+MAX_NEWTON_ITERS = 50
+INVERT = True
+KEEP_PGM = False
+KEEP_STATS = True
+TRACK_TIME = True
+OVERWRITE = False
 
 # ICONS - TIMES - V2  (actual site counts; comments show NxN equivalent)
 NUM_SITES = [
@@ -54,7 +70,21 @@ def main():
         print(f"  NUM_SITES = {num_sites}")
         print(f"{'='*70}\n")
 
-        cmd = [sys.executable, str(SCRIPT_PATH), "--num_sites", str(num_sites)]
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--data_path", str(DATA_PATH),
+            "--n", str(N),
+            "--image_size", str(IMAGE_SIZE[0]), str(IMAGE_SIZE[1]),
+            "--num_sites", str(num_sites),
+            "--seed", str(SEED),
+            "--max_iters", str(MAX_ITERS),
+            "--max_newton_iters", str(MAX_NEWTON_ITERS),
+            "--invert" if INVERT else "--no-invert",
+            "--keep_pgm" if KEEP_PGM else "--no-keep_pgm",
+            "--keep_stats" if KEEP_STATS else "--no-keep_stats",
+            "--track_time" if TRACK_TIME else "--no-track_time",
+            "--overwrite" if OVERWRITE else "--no-overwrite",
+        ]
         print(f"Command: {' '.join(cmd)}\n")
 
         result = subprocess.run(cmd)
