@@ -329,6 +329,12 @@ def main() -> int:
 	# CONFIGURATION PARAMETERS #
 	############################
 
+	# ICONS-50 - dataset
+	data_path = "/groups/asharf_group/ofirgila/ControlNet/training/icons-50_512_BNOT"
+	num_sites = 1024
+	image_size = (512, 512)
+	track_time = False
+
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/monkey"
 	# num_sites = 1024
 
@@ -342,6 +348,7 @@ def main() -> int:
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/quantitative_advance_metrics"
 	# num_sites = 1024
 
+
 	# Faces Set Sample
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/faces_results_compare"
 	# num_sites = 1024
@@ -354,8 +361,8 @@ def main() -> int:
 	# image_size = (512, 512)
 
 	# ICONS - TIMES - V2
-	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
-	num_sites = 256  # 16
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
+	# num_sites = 256  # 16
 	# num_sites = 576  # 24 
 	# num_sites = 1024  # 32
 	# num_sites = 1600  # 40
@@ -368,7 +375,7 @@ def main() -> int:
 	# num_sites = 9216  # 96
 	# num_sites = 10816  # 104
 	# num_sites = 12544  # 112
-	image_size = (512, 512)
+	# image_size = (512, 512)
 
 	parser = argparse.ArgumentParser(
 		description="Generate BNOT source/target pairs from images under source/",
