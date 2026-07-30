@@ -18,7 +18,7 @@ SCRIPT_PATH = Path(__file__).parent / "bnot_data_gen.py"
 
 DATA_PATH = Path(
     "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion"
-    "/experiments/outputs/icons_results_runtimes"
+    "/experiments/outputs/icons_results_runtimes_bnot"
 )
 
 # Full ICONS - TIMES - V2 parameter set (passed explicitly; do not assume the

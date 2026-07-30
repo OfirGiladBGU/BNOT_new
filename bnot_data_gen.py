@@ -80,6 +80,52 @@ def load_points(dat_path: Path) -> np.ndarray:
 	return points[:, :2]
 
 
+def points_to_canonical(points: np.ndarray, width: int, height: int) -> np.ndarray:
+	"""BNOT solver output -> canonical (N,2) float64, x-then-y, [0,1], y increasing DOWNWARD.
+
+	Canonical is the convention control_v4/train_control.py:extract_points_from_target returns
+	([cx / w, cy / h]), so an exported .npy is a drop-in replacement for centroid detection.
+
+	The solver works in a centred domain [-dx, dx] x [-dy, dy] with y pointing UP. This mirrors
+	save_target_png_from_points exactly -- same dx/dy, same two expressions -- and omits only its
+	int(np.round(... * (width - 1))) quantisation, which is the single lossy step. The .dat the CLI
+	writes is deleted after rasterisation, so this is the only lossless record that survives.
+	"""
+	pts = np.asarray(points, dtype=np.float64)
+	if pts.size == 0:
+		return pts.reshape(0, 2)
+	dx = 0.5
+	dy = 0.5 * float(height) / float(width)
+	out = np.empty_like(pts)
+	out[:, 0] = 0.5 * (pts[:, 0] + dx) / dx
+	out[:, 1] = 0.5 * (dy - pts[:, 1]) / dy
+	# Half-open [0, 1): a coordinate of exactly 1.0 indexes one past the last pixel downstream.
+	return np.clip(out, 0.0, 1.0 - 1e-9)
+
+
+def save_points_npy(points: np.ndarray, out_path: Path, n_expected: int | None = None) -> None:
+	"""Write canonical coordinates atomically.
+
+	n_expected is ASSERTED, not repaired. A short export means BNOT did not place the requested number
+	of sites, and silently padding it -- which the training loader does, with UNIFORM RANDOM points --
+	would inject noise into a target whose point statistics are the object of study.
+	"""
+	pts = np.asarray(points, dtype=np.float64)
+	if pts.ndim != 2 or pts.shape[1] != 2:
+		raise ValueError(f"expected (N, 2) points, got {pts.shape}")
+	if n_expected is not None and len(pts) != n_expected:
+		raise ValueError(f"expected {n_expected} points, got {len(pts)} for {out_path}")
+	out_path.parent.mkdir(parents=True, exist_ok=True)
+	# np.save() APPENDS ".npy" when handed a path, which is why the temp name used to have to
+	# end in that extension itself -- leaving interrupted runs behind a temp file that any *.npy
+	# glob over the target dir would pick up as a real export. Passing a file handle suppresses
+	# the append, so the temp is a plain "<stem>.npy.tmp" and cannot be mistaken for one.
+	tmp = str(out_path) + ".tmp"
+	with open(tmp, "wb") as handle:
+		np.save(handle, pts)
+	os.replace(tmp, out_path)
+
+
 def save_target_png_from_points(points: np.ndarray, out_path: Path, width: int, height: int) -> None:
 	canvas = np.full((height, width), 255, dtype=np.uint8)
 	if points.size != 0:
@@ -228,9 +274,16 @@ def process_one(
 	track_time: bool,
 	timestamps_dir: Path | None,
 	rel_path: Path,
+	export_png: bool = True,
+	export_npy: bool = True,
 ) -> str:
 	target_png = target_out_dir / f"{src_path.stem}.png"
-	if source_out.exists() and target_png.exists():
+	target_npy = target_out_dir / f"{src_path.stem}.npy"
+	outputs_ready = (
+		(target_png.exists() if export_png else True)
+		and (target_npy.exists() if export_npy else True)
+	)
+	if source_out.exists() and outputs_ready:
 		return "skipped"
 
 	# Load image as array but never overwrite the original file. If any
@@ -278,8 +331,21 @@ def process_one(
 		raise RuntimeError("BNOT did not produce a .dat file for rasterization")
 
 	points = load_points(result.resolved_paths.dat_path)
+
+	# NPY: the solver's own centred-domain coordinates mapped to canonical [0,1] x-then-y with y
+	# DOWN, using exactly the mapping in save_target_png_from_points but without its
+	# int(np.round(... * (width - 1))) quantisation. The .dat is deleted below, so this is the only
+	# lossless record that survives.
+	if export_npy:
+		save_points_npy(
+			points_to_canonical(points, width=width, height=height),
+			target_npy,
+			n_expected=num_sites,
+		)
+
 	# Use source image dimensions (read from saved file) for rasterization
-	save_target_png_from_points(points, target_png, width=width, height=height)
+	if export_png:
+		save_target_png_from_points(points, target_png, width=width, height=height)
 
 	# Clean up native output files (.dat and stats .txt) — they are intermediate
 	# and not needed after rasterization. Keep PGMs if requested.
@@ -321,6 +387,8 @@ def main() -> int:
 	invert = True
 	keep_pgm = False
 	keep_stats = True
+	export_png = True  # Write the rasterised target .png
+	export_npy = True  # Write exact continuous coordinates as target .npy
 	track_time = True
 	overwrite = False
 	executable = None
@@ -329,8 +397,8 @@ def main() -> int:
 	# CONFIGURATION PARAMETERS #
 	############################
 
-	# ICONS-50 - dataset
-	data_path = "/groups/asharf_group/ofirgila/ControlNet/training/icons-50_512_BNOT"
+	# Icons-50 - dataset
+	data_path = "/groups/asharf_group/ofirgila/ControlNet/training/Icons-50_1024_BNOT"
 	num_sites = 1024
 	image_size = (512, 512)
 	track_time = False
@@ -394,6 +462,10 @@ def main() -> int:
 						help="Invert the grayscale source before inference")
 	parser.add_argument("--keep_pgm", action=argparse.BooleanOptionalAction, default=keep_pgm)
 	parser.add_argument("--keep_stats", action=argparse.BooleanOptionalAction, default=keep_stats)
+	parser.add_argument("--export_png", action=argparse.BooleanOptionalAction, default=export_png,
+		help="Write the rasterised target .png")
+	parser.add_argument("--export_npy", action=argparse.BooleanOptionalAction, default=export_npy,
+		help="Write exact continuous coordinates as target .npy")
 	parser.add_argument("--track_time", action=argparse.BooleanOptionalAction, default=track_time,
 						help="Write per-image timing text files into timestamps/")
 	parser.add_argument("--overwrite", action=argparse.BooleanOptionalAction, default=overwrite,
@@ -492,6 +564,8 @@ def main() -> int:
 				track_time=args.track_time,
 				timestamps_dir=timestamps_dir,
 				rel_path=rel_path,
+				export_png=args.export_png,
+				export_npy=args.export_npy,
 			)
 			if status == "processed":
 				processed += 1
