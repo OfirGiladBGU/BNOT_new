@@ -106,15 +106,18 @@ def points_to_canonical(points: np.ndarray, width: int, height: int) -> np.ndarr
 def save_points_npy(points: np.ndarray, out_path: Path, n_expected: int | None = None) -> None:
 	"""Write canonical coordinates atomically.
 
-	n_expected is ASSERTED, not repaired. A short export means BNOT did not place the requested number
-	of sites, and silently padding it -- which the training loader does, with UNIFORM RANDOM points --
-	would inject noise into a target whose point statistics are the object of study.
+	n_expected is NOT enforced. The solver writes whatever it produced; repair happens in
+	exactly ONE place -- train_control._fit_points_to_n -- which duplicates an existing point
+	to reach the grid budget. Duplication is the only repair that is REVERSIBLE: a duplicate
+	has nearest-neighbour distance exactly 0, so it is trivially detectable and removable,
+	and dropping it recovers the true statistics exactly. A uniform-random pad is
+	indistinguishable from a real point and can never be undone.
 	"""
 	pts = np.asarray(points, dtype=np.float64)
 	if pts.ndim != 2 or pts.shape[1] != 2:
 		raise ValueError(f"expected (N, 2) points, got {pts.shape}")
 	if n_expected is not None and len(pts) != n_expected:
-		raise ValueError(f"expected {n_expected} points, got {len(pts)} for {out_path}")
+		print(f"  [warn] wrote {len(pts)} points (expected {n_expected}): {out_path}")
 	out_path.parent.mkdir(parents=True, exist_ok=True)
 	# np.save() APPENDS ".npy" when handed a path, which is why the temp name used to have to
 	# end in that extension itself -- leaving interrupted runs behind a temp file that any *.npy
