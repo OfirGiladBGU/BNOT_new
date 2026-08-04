@@ -1,3 +1,5 @@
+#include <cmath>   // FIX: std::isfinite guards in update_positions/update_weights
+#include <iostream>
 #include "scene.h"
 #include "util.h"
 #include "timer.h"
@@ -18,7 +20,7 @@ unsigned Scene::count_visible_sites() const
         if (vi->is_hidden()) continue;
         nb++;
     }
-    return nb;   
+    return nb;
 }
 
 void Scene::collect_visible_points(std::vector<Point>& points) const
@@ -49,7 +51,7 @@ void Scene::collect_sites(std::vector<Point>& points,
         Vertex_handle vi = m_vertices[i];
         Point pi = vi->get_position();
         points.push_back(pi);
-        
+
         FT wi = 0.0;
         wi = vi->get_weight();
         weights.push_back(wi);
@@ -91,7 +93,7 @@ bool Scene::construct_triangulation(const std::vector<Point>& points,
         pre_compute_area();
         compute_capacities(m_capacities);
     }
-    
+
     if (m_timer_on) Timer::stop_timer(m_timer, COLOR_BLUE);
     return (ok || !skip);
 }
@@ -100,7 +102,7 @@ bool Scene::populate_vertices(const std::vector<Point>& points,
                               const std::vector<FT>& weights)
 {
     if (m_timer_on) Timer::start_timer(m_timer, COLOR_YELLOW, "Populate");
-    
+
     unsigned nb = 0;
     unsigned nsites = points.size();
     for (unsigned i = 0; i < nsites; ++i)
@@ -110,13 +112,13 @@ bool Scene::populate_vertices(const std::vector<Point>& points,
         m_vertices.push_back(vertex);
         nb++;
     }
-    
+
     if (m_timer_on) Timer::stop_timer(m_timer, COLOR_YELLOW);
 
     bool none_hidden = true;
     if (count_visible_sites() != m_vertices.size())
         none_hidden = false;
-    
+
     return none_hidden;
 }
 
@@ -127,9 +129,9 @@ Vertex_handle Scene::insert_vertex(const Point& point,
     Weighted_point wp(point, weight);
     Vertex_handle vertex = m_rt.insert(wp);
 
-    if (vertex->get_index() != -1) 
+    if (vertex->get_index() != -1)
         return Vertex_handle();
-    
+
     vertex->set_index(index);
     return vertex;
 }
@@ -153,24 +155,118 @@ void Scene::compute_capacities(std::vector<FT>& capacities) const
     }
 }
 
+// FIX (bounds): how many entries the loops below will actually consume.
+//
+// `hidden == true`  -> hidden vertices are skipped, so one entry per VISIBLE vertex.
+// `hidden == false` -> nothing is skipped, so one entry per vertex in m_vertices.
+//
+// Every caller builds its array with collect_visible_points/collect_visible_weights, i.e. sized to
+// the VISIBLE count. So a `hidden == false` call is only in bounds while nothing is hidden. The
+// moment one vertex is hidden the index runs past the end of the vector and reads heap garbage --
+// undefined behaviour that puts an arbitrary bit pattern into a site position or weight and
+// surfaces much later, and unattributably, as CGAL's "Mpzf from infinity or NaN" assertion.
+//
+// This is also why the std::isfinite guards below are not sufficient on their own: they scan
+// [0, array.size()), which is exactly the region that is NOT corrupted.
+unsigned Scene::count_update_slots(bool hidden) const
+{
+    return hidden ? count_visible_sites() : (unsigned) m_vertices.size();
+}
+
+bool Scene::check_update_size(unsigned given, bool hidden, const char* who) const
+{
+    unsigned needed = count_update_slots(hidden);
+    if (given >= needed) return true;
+
+    static unsigned reported = 0;
+    if (reported++ < 16)
+    {
+        std::cout << "[BOUNDS] " << who << ": " << given << " entries for " << needed
+                  << " slots (vertices=" << m_vertices.size()
+                  << " visible=" << count_visible_sites()
+                  << " hidden_flag=" << (hidden ? 1 : 0)
+                  << ") -- update skipped" << std::endl;
+    }
+    return false;
+}
+
+// FIX (visibility): every array the optimiser builds -- collect_visible_weights, collect_visible_points,
+// compute_weight_gradient, compute_position_gradient, and the Newton direction -- holds ONE entry per
+// VISIBLE vertex. The line search then applies them with hidden == false, which walks EVERY vertex in
+// m_vertices. That pairing is only valid while nothing is hidden; upstream simply assumes it always
+// holds. When it does not, the apply loop indexes past the end of the array.
+//
+// It cannot be fixed by making the arrays full-size instead: CLineSearch::evaluate_gradient iterates
+// over m_v0.size() against a visible-only V, so the same overrun would just reappear there.
+//
+// So restore the precondition rather than generalise the indexing. With every weight equal the power
+// diagram degenerates to a plain Delaunay triangulation, in which every distinct site owns a non-empty
+// cell -- so reset_weights() makes the whole set visible again. optimize_all already does this between
+// OUTER iterations (if (nb1 != nb0) reset_weights()); this covers the inner weight loop, which is where
+// the vertex is actually lost.
+bool Scene::restore_visibility_invariant(const char* who)
+{
+    unsigned visible = count_visible_sites();
+    if (visible == m_vertices.size()) return false;
+
+    static unsigned reported = 0;
+    if (reported++ < 16)
+    {
+        std::cout << "[VISIBILITY] " << who << ": " << visible << "/" << m_vertices.size()
+                  << " visible on entry -- resetting weights to restore the full set" << std::endl;
+    }
+    reset_weights();
+
+    unsigned after = count_visible_sites();
+    if (after != m_vertices.size() && reported < 16)
+    {
+        // Zero weights did NOT recover every cell. That means coincident or degenerate sites, not a
+        // weight problem, and the caller is about to build a short array again -- check_update_size
+        // will refuse the update rather than let it run off the end.
+        std::cout << "[VISIBILITY] " << who << ": still " << after << "/" << m_vertices.size()
+                  << " after reset_weights()" << std::endl;
+    }
+    return true;
+}
 void Scene::update_positions(const std::vector<Point>& points, bool clamp, bool hidden)
 {
+    // FIX: refuse the update rather than read past the end of `points`. See count_update_slots.
+    if (!check_update_size((unsigned) points.size(), hidden, "update_positions")) return;
+
     unsigned j = 0;
     for (unsigned i = 0; i < m_vertices.size(); ++i)
     {
         Vertex_handle vi = m_vertices[i];
         if (hidden && vi->is_hidden()) continue;
-        
+
         Point pi = points[j++];
+        // FIX: last line of defence. m_domain.clamp() PROPAGATES NaN rather than trapping it (every
+        // comparison against NaN is false), so a bad centroid would be stored and only surface later
+        // as an unattributable CGAL Mpzf assertion. Keep the previous position instead.
+        if (!std::isfinite(CGAL::to_double(pi.x())) || !std::isfinite(CGAL::to_double(pi.y())))
+            continue;
         if (clamp) pi = m_domain.clamp(pi);
         vi->set_position(pi);
     }
 }
 
 void Scene::update_weights(const std::vector<FT>& weights, bool hidden)
-{    
+{
+    // FIX: refuse the update rather than read past the end of `weights`. This check has to come
+    // BEFORE the isfinite scan below -- the scan covers [0, weights.size()), so it can never see
+    // the out-of-bounds entries that are the actual source of the non-finite value.
+    if (!check_update_size((unsigned) weights.size(), hidden, "update_weights")) return;
+
     unsigned j = 0;
+    // FIX: compute_mean over a vector containing one Inf/NaN yields a non-finite mean, which is then
+    // subtracted from EVERY weight -- one bad site poisons all of them. Bail out before that
+    // amplification rather than after it.
+    for (unsigned i = 0; i < weights.size(); ++i)
+    {
+        if (!std::isfinite(weights[i])) return;
+    }
     FT mean = compute_mean(weights);
+    if (!std::isfinite(mean)) return;
     for (unsigned i = 0; i < m_vertices.size(); ++i)
     {
         Vertex_handle vi = m_vertices[i];
@@ -200,11 +296,11 @@ void Scene::pre_build_dual_cells()
     {
         Vertex_handle vertex = m_vertices[i];
         if (vertex->is_hidden()) continue;
-        
+
         bool ok = m_rt.pre_build_polygon(vertex, vertex->dual().points());
         /*
-        if (!ok) 
-            std::cout << "Vertex " << vertex->get_index() 
+        if (!ok)
+            std::cout << "Vertex " << vertex->get_index()
             << ": pre_build_dual_cell failed" << std::endl;
         */
     }

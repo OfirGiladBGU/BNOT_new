@@ -158,6 +158,15 @@ public:
                                 const unsigned index);
     
     void compute_capacities(std::vector<FT>& capacities) const;
+
+    // FIX (bounds): how many array entries update_positions/update_weights will consume, and a
+    // guarded size check. See init.cpp for why the isfinite guards alone cannot catch this.
+    unsigned count_update_slots(bool hidden) const;
+
+    bool check_update_size(unsigned given, bool hidden, const char* who) const;
+
+    // FIX (visibility): re-establish "nothing is hidden" before building visible-only arrays.
+    bool restore_visibility_invariant(const char* who);
     
     void update_positions(const std::vector<Point>& points, 
                           bool clamp = true,

@@ -3,6 +3,7 @@
 
 // STL
 #include <vector>
+#include <cmath>   // FIX: std::isfinite guards below
 
 // CGAL
 #include <CGAL/intersections.h>
@@ -165,8 +166,13 @@ public:
             sum_area += area;
             sum_vector = sum_vector + area*(barycenter - CGAL::ORIGIN);
         }
-        if (sum_area == 0.0) return get_point(0);
-        return CGAL::ORIGIN + (sum_vector / sum_area);
+        // FIX: see primitives.h -- `== 0.0` misses a denormal sum_area and the division overflows
+        // to +-Inf, which later trips CGAL's Mpzf conversion (Expr: dexp != 2047).
+        if (!(sum_area > 1e-30)) return get_point(0);
+        Point centroid_out = CGAL::ORIGIN + (sum_vector / sum_area);
+        if (!std::isfinite(CGAL::to_double(centroid_out.x())) ||
+            !std::isfinite(CGAL::to_double(centroid_out.y()))) return get_point(0);
+        return centroid_out;
     }
 
     // VARIANCE //

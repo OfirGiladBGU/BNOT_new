@@ -43,6 +43,17 @@ public:
             return true;
         }
         
+        // `false` is CORRECT and deliberate: it reassigns EVERY vertex in m_vertices, including any
+        // that a trial step has just hidden, which is what allows a hidden vertex to come back. It
+        // relies on the invariant that nothing is hidden when the search STARTS -- only then is the
+        // visible-only X from collect_visible_weights() also the all-vertices array.
+        //
+        // Passing true here instead is WRONG: a vertex hidden by one trial would keep its stale
+        // weight forever and stay hidden. Measured on apple_0_airplane: 1024 sites -> 395.
+        //
+        // When the invariant is violated (a previous failed search left vertices hidden) X is SHORT,
+        // and update_weights would index past its end. Scene::check_update_size now refuses that
+        // update and reports it rather than reading heap garbage.
         m_scene->update_weights(X, false);
         return m_scene->update_triangulation(true);
         //return has_same_vertices();
@@ -96,6 +107,7 @@ public:
             return true;
         }
         
+        // `false` for the same reason as CLSWeights::update_scene above.
         m_scene->update_positions(X, true, false);
         return m_scene->update_triangulation(true);
         //return has_same_vertices();

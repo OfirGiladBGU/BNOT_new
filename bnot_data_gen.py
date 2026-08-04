@@ -289,6 +289,22 @@ def process_one(
 	if source_out.exists() and outputs_ready:
 		return "skipped"
 
+	# A timing file must describe the run that actually produced the target. The write at the
+	# end of this function is only reached on success, so a crash leaves whatever an EARLIER
+	# attempt wrote still on disk -- and nothing downstream can tell that apart from a genuine
+	# measurement of the current output. Clear it up front: for a failed icon, ABSENT is honest,
+	# stale is not. On a re-run the file is rewritten from scratch, never appended to, so a
+	# crashed attempt can never contribute to the recorded time.
+	timestamp_path = None
+	if track_time and timestamps_dir is not None:
+		timestamp_path = timestamps_dir / rel_path.with_suffix(".txt")
+		try:
+			timestamp_path.unlink()
+		except FileNotFoundError:
+			pass
+		except OSError:
+			pass
+
 	# Load image as array but never overwrite the original file. If any
 	# modification is required (resize/invert), create a temporary PGM file
 	# and pass its path to the native CLI. The temp file is removed after use.
@@ -365,9 +381,8 @@ def process_one(
 	except Exception:
 		pass
 
-	if track_time and timestamps_dir is not None:
+	if timestamp_path is not None:
 		timestamps_dir.mkdir(parents=True, exist_ok=True)
-		timestamp_path = timestamps_dir / rel_path.with_suffix(".txt")
 		timestamp_path.parent.mkdir(parents=True, exist_ok=True)
 		with timestamp_path.open("w", encoding="utf-8") as handle:
 			handle.write(f"pgm_write_seconds: {result.timings.pgm_write_seconds:.6f}\n")

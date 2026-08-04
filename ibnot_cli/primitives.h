@@ -3,6 +3,7 @@
 
 // STL
 #include <vector>
+#include <cmath>   // FIX: std::isfinite guards below
 
 // local
 #include "convex_polygon.h"
@@ -143,8 +144,18 @@ public:
             sum_area += area;
             sum_vector = sum_vector + area*(centroid - CGAL::ORIGIN);
         }
-        if (sum_area == 0.0) return get_position();
-        return CGAL::ORIGIN + (sum_vector / sum_area);
+        // FIX: an `== 0.0` test does NOT protect this division. A degenerate sliver power cell can
+        // give sum_area a DENORMAL but nonzero value (~1e-320), and sum_vector / sum_area then
+        // overflows to +-Inf. That Inf becomes a site position via Scene::update_positions and dies
+        // in CGAL's exact predicates as
+        //   "CGAL ERROR: assertion violation! Expr: dexp != 2047  File: CGAL/Mpzf.h"
+        // (dexp == 2047 is the all-ones IEEE double exponent, i.e. Inf/NaN). Observed on 36/10000
+        // icons. Use a positive tolerance and also reject a non-finite result outright.
+        if (!(sum_area > 1e-30)) return get_position();
+        Bare_point centroid_out = CGAL::ORIGIN + (sum_vector / sum_area);
+        if (!std::isfinite(CGAL::to_double(centroid_out.x())) ||
+            !std::isfinite(CGAL::to_double(centroid_out.y()))) return get_position();
+        return centroid_out;
     }
     
     FT compute_variance() const

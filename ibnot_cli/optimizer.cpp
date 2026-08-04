@@ -1,4 +1,5 @@
 #include <map>
+#include <cmath>   // FIX: std::isfinite guard in solve_linear_system
 
 #include "scene.h"
 #include "util.h"
@@ -35,6 +36,10 @@ FT Scene::optimize_positions_via_lloyd(bool update)
 
 FT Scene::optimize_positions_via_gradient_ascent(FT timestep, bool update)
 {
+    // FIX: the arrays built below are visible-only but applied with hidden == false. Re-establish the
+    // "nothing hidden" precondition first, so the apply loop cannot index past their end.
+    restore_visibility_invariant("optimize_positions_via_gradient_ascent");
+
     std::vector<Point> points;
     collect_visible_points(points);
 
@@ -64,6 +69,10 @@ FT Scene::optimize_positions_via_gradient_ascent(FT timestep, bool update)
 
 FT Scene::optimize_weights_via_gradient_descent(FT timestep, bool update)
 {
+    // FIX: the arrays built below are visible-only but applied with hidden == false. Re-establish the
+    // "nothing hidden" precondition first, so the apply loop cannot index past their end.
+    restore_visibility_invariant("optimize_weights_via_gradient_descent");
+
     std::vector<FT> gradient;
     compute_weight_gradient(gradient, -1.0);
     
@@ -91,6 +100,10 @@ FT Scene::optimize_weights_via_gradient_descent(FT timestep, bool update)
 
 FT Scene::optimize_weights_via_newton(FT timestep, bool update)
 {
+    // FIX: the arrays built below are visible-only but applied with hidden == false. Re-establish the
+    // "nothing hidden" precondition first, so the apply loop cannot index past their end.
+    restore_visibility_invariant("optimize_weights_via_newton");
+
     std::vector<FT> gradient;
     compute_weight_gradient(gradient, -1.0);
     
@@ -194,7 +207,19 @@ bool Scene::solve_linear_system(const SparseMatrix& A,
     if (!ok) return false;
     
     ok = solver.solve(b, x);
-    return ok;
+    if (!ok) return false;
+
+    // FIX: the QR can report success and still return Inf/NaN when the Laplacian is singular or
+    // badly conditioned (an isolated site, or a vanishing power cell giving a zero row). The caller
+    // feeds x straight into update_weights, which subtracts compute_mean(weights) -- so a SINGLE
+    // non-finite entry propagates into EVERY weight, and the next update_triangulation() dies in
+    // CGAL's Mpzf conversion. Reject the step instead; the caller already handles `false` by
+    // leaving the weights untouched.
+    for (unsigned i = 0; i < x.size(); ++i)
+    {
+        if (!std::isfinite(x[i])) return false;
+    }
+    return true;
 }
 
 unsigned Scene::optimize_weights_via_gradient_descent_until_converge(FT timestep, 
