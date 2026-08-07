@@ -421,47 +421,39 @@ def main() -> int:
 	image_size = (512, 512)
 	track_time = False
 
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/monkey"
-	# num_sites = 1024
 
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/quadratic_V2"
+	# Quadratic Sample
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/quadratic_V2"
 	# num_sites = 1024
+	# track_time = False
 
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/results/plant2"
+	# Monkey Sample
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/monkey"
 	# num_sites = 1024
+	# track_time = False
 
-	# ICONS
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/quantitative_advance_metrics"
+	# Plant Sample
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/plant2"
 	# num_sites = 1024
+	# track_time = False
 
 
 	# Faces Set Sample
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/faces_results_compare"
 	# num_sites = 1024
 
-	# ICONS - TIMES - V1
+	# Icons-50 - METRICS
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/quantitative_advance_metrics"
+	# num_sites = 1024
+	# track_time = False
+
+	# Icons-50 - TIMES - V1
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
 	# num_sites = 576
 	# num_sites = 1024
 	# num_sites = 2304
 	# image_size = (512, 512)
 
-	# ICONS - TIMES - V2
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
-	# num_sites = 256  # 16
-	# num_sites = 576  # 24 
-	# num_sites = 1024  # 32
-	# num_sites = 1600  # 40
-	# num_sites = 2304  # 48
-	# num_sites = 3136  # 56
-	# num_sites = 4096  # 64
-	# num_sites = 5184  # 72
-	# num_sites = 6400  # 80
-	# num_sites = 7744  # 88
-	# num_sites = 9216  # 96
-	# num_sites = 10816  # 104
-	# num_sites = 12544  # 112
-	# image_size = (512, 512)
 
 	parser = argparse.ArgumentParser(
 		description="Generate BNOT source/target pairs from images under source/",
