@@ -440,7 +440,9 @@ def main() -> int:
 
 	# Faces Set Sample
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/faces_results_compare"
+	# image_size = (512, 512)
 	# num_sites = 1024
+	# track_time = False
 
 	# Icons-50 - METRICS
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/quantitative_advance_metrics"
