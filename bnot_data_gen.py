@@ -17,7 +17,13 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps
+import random
 import shutil
+
+try:
+	import cv2  # only needed for --apply_preprocess
+except Exception:
+	cv2 = None
 
 # Ensure prints flush immediately for real-time logging in pipelines and
 # background runs. Prefer line-buffering when available, otherwise
@@ -47,13 +53,70 @@ import tempfile
 VALID_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
-def load_grayscale_image(image_path: Path, image_size: tuple[int, int] | None, invert: bool) -> np.ndarray:
-	image = Image.open(image_path).convert("L")
-	if image_size is not None and image.size != image_size:
-		image = image.resize(image_size, resample=Image.Resampling.LANCZOS)
-	if invert:
-		image = ImageOps.invert(image)
-	return np.asarray(image, dtype=np.float64) / 255.0
+# --- GBN preprocessing (ported from GaussianBlueNoise/scripts/image_preprocess.py) ---
+def percentile_stretch(gray, p_low=1.0, p_high=99.0):
+	lo, hi = np.percentile(gray, [p_low, p_high])
+	if hi - lo < 1e-6:
+		return gray.copy()
+	out = (gray.astype(np.float32) - lo) * (255.0 / (hi - lo))
+	return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def apply_clahe(gray, clip_limit=3.0, tile=8):
+	clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile, tile))
+	return clahe.apply(gray)
+
+
+def unsharp_mask(gray, sigma=1.4, amount=1.5):
+	blur = cv2.GaussianBlur(gray, (0, 0), sigma)
+	sharp = cv2.addWeighted(gray.astype(np.float32), 1.0 + amount, blur.astype(np.float32), -amount, 0)
+	return np.clip(sharp, 0, 255).astype(np.uint8)
+
+
+def suppress_background(gray):
+	g = gray.copy()
+	_, bin_img = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+	k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+	bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_OPEN, k, iterations=1)
+	bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, k, iterations=1)
+	h, w = bin_img.shape
+	flood = bin_img.copy()
+	flood_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+	cv2.floodFill(flood, flood_mask, (0, 0), 128)
+	bg = flood == 128
+	out = g.astype(np.float32)
+	out[bg] = 0.30 * out[bg] + 0.70 * 255.0
+	return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def preprocess_image(gray, do_bg_suppression=True):
+	"""GBN enhancement: stretch -> CLAHE -> unsharp -> stretch -> optional bg-suppress."""
+	if cv2 is None:
+		raise RuntimeError("cv2 (opencv-python) is required for --apply_preprocess")
+	x = percentile_stretch(gray, 1.0, 99.0)
+	x = apply_clahe(x, 3.0, 8)
+	x = unsharp_mask(x, 1.4, 1.5)
+	x = percentile_stretch(x, 0.8, 99.2)
+	if do_bg_suppression:
+		x = suppress_background(x)
+	return x
+
+
+def load_grayscale_image(image_path, image_size, apply_preprocess=False, disable_bg_suppression=False):
+	"""Grayscale in [0,1], compositing transparency onto WHITE (transparent bg -> white, not
+	black), with an optional GBN preprocess. Inversion for the solver is applied by the caller."""
+	img = Image.open(image_path)
+	if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+		img = img.convert("RGBA")
+		bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+		img = Image.alpha_composite(bg, img)
+	img = img.convert("L")
+	if image_size is not None and img.size != image_size:
+		img = img.resize(image_size, resample=Image.Resampling.LANCZOS)
+	gray = np.asarray(img, dtype=np.uint8)
+	if apply_preprocess:
+		gray = preprocess_image(gray, do_bg_suppression=not disable_bg_suppression)
+	return gray.astype(np.float64) / 255.0
 
 
 def save_source_image(image_array: np.ndarray, out_path: Path) -> None:
@@ -221,6 +284,7 @@ def build_request(
 	seed: int,
 	max_iters: int,
 	max_newton_iters: int,
+	epsilon: float,
 	keep_pgm: bool,
 	keep_stats: bool,
 	native_timer: bool,
@@ -235,6 +299,7 @@ def build_request(
 		**img_arg,
 		native=NativeConfig(
 			num_sites=num_sites,
+			epsilon=epsilon,
 			seed=seed,
 			max_iters=max_iters,
 			max_newton_iters=max_newton_iters,
@@ -268,15 +333,19 @@ def process_one(
 	executable: Path,
 	image_size: tuple[int, int] | None,
 	invert: bool,
+	apply_preprocess: bool,
+	disable_bg_suppression: bool,
 	num_sites: int,
 	seed: int,
 	max_iters: int,
 	max_newton_iters: int,
+	epsilon: float,
 	keep_pgm: bool,
 	keep_stats: bool,
 	track_time: bool,
 	timestamps_dir: Path | None,
 	rel_path: Path,
+	overwrite: bool = False,
 	export_png: bool = True,
 	export_npy: bool = True,
 ) -> str:
@@ -286,7 +355,7 @@ def process_one(
 		(target_png.exists() if export_png else True)
 		and (target_npy.exists() if export_npy else True)
 	)
-	if source_out.exists() and outputs_ready:
+	if not overwrite and source_out.exists() and outputs_ready:
 		return "skipped"
 
 	# A timing file must describe the run that actually produced the target. The write at the
@@ -305,19 +374,19 @@ def process_one(
 		except OSError:
 			pass
 
-	# Load image as array but never overwrite the original file. If any
-	# modification is required (resize/invert), create a temporary PGM file
-	# and pass its path to the native CLI. The temp file is removed after use.
-	image_array = load_grayscale_image(src_path, image_size=image_size, invert=invert)
-	# Preserve the original file colors: copy into `source/` only if the
-	# source path is different from the destination (i.e., when reading from
-	# `original/`). If we are already reading from `source/`, leave it alone.
+	# Load as grayscale (transparency -> white, optional GBN preprocess); inversion for the
+	# solver density is applied below so the SAVED source stays the (non-inverted) condition.
+	source_gray_01 = load_grayscale_image(src_path, image_size,
+		apply_preprocess=apply_preprocess, disable_bg_suppression=disable_bg_suppression)
+	# Save the processed grayscale condition as a real PNG (always .png). When reading in-place
+	# from source/ with the same filename (legacy), leave the user's original file untouched.
 	try:
 		if src_path.resolve() != source_out.resolve():
-			save_source_copy(src_path, source_out)
+			save_source_image(source_gray_01, source_out)
 	except Exception:
-		# Fall back to copying if resolution check fails for any reason.
-		save_source_copy(src_path, source_out)
+		save_source_image(source_gray_01, source_out)
+	# The BNOT solver density is optionally inverted.
+	image_array = (1.0 - source_gray_01) if invert else source_gray_01
 
 	# Use the saved `source` image dimensions as authoritative for output size
 	with Image.open(source_out) as _src_im:
@@ -340,6 +409,7 @@ def process_one(
 			seed=seed,
 			max_iters=max_iters,
 			max_newton_iters=max_newton_iters,
+			epsilon=epsilon,
 			keep_pgm=keep_pgm,
 			keep_stats=keep_stats,
 			native_timer=track_time,
@@ -374,12 +444,16 @@ def process_one(
 			dat_path.unlink()
 	except Exception:
 		pass
-	try:
-		stats_path = result.resolved_paths.stats_path
-		if stats_path is not None and stats_path.exists():
-			stats_path.unlink()
-	except Exception:
-		pass
+	# Only remove the solver's stats .txt when the caller did NOT ask to keep it. It carries
+	# `iterations:` and `rms_rel_capacity_error:`, which are the only way to tell a converged
+	# run from one truncated at max_iters.
+	if not keep_stats:
+		try:
+			stats_path = result.resolved_paths.stats_path
+			if stats_path is not None and stats_path.exists():
+				stats_path.unlink()
+		except Exception:
+			pass
 
 	if timestamp_path is not None:
 		timestamps_dir.mkdir(parents=True, exist_ok=True)
@@ -399,43 +473,100 @@ def main() -> int:
 	n = -1
 	image_size = None
 	num_sites = 1024
+	# -1 = draw a fresh random seed per image (independent realizations); any other value is
+	# used as-is for every image, which is the historical behaviour.
 	seed = 7
 	max_iters = 25
 	max_newton_iters = 50
+	# Convergence-tolerance scale for optimize_all's position/weight thresholds.
+	# Smaller = tighter = the optimiser runs longer. 1.0 is the CLI's own default.
+	epsilon = 1.0
 	invert = True
+	apply_preprocess = False
+	disable_bg_suppression = False
 	keep_pgm = False
-	keep_stats = True
+	keep_stats = False
 	export_png = True  # Write the rasterised target .png
 	export_npy = True  # Write exact continuous coordinates as target .npy
 	track_time = True
 	overwrite = False
 	executable = None
 
+	target_folder = "target"
+
 	############################
 	# CONFIGURATION PARAMETERS #
 	############################
 
 	# Icons-50 - dataset
-	data_path = "/groups/asharf_group/ofirgila/ControlNet/training/Icons-50_1024_BNOT"
-	num_sites = 1024
-	image_size = (512, 512)
-	track_time = False
+	# data_path = "/groups/asharf_group/ofirgila/ControlNet/training/Icons-50_1024_BNOT"
+	# num_sites = 1024
+	# image_size = (512, 512)
+	# track_time = False
+
+	# CelebA - dataset
+	# data_path = "/groups/asharf_group/ofirgila/ControlNet/training/CelebA-5K_1024_BNOT"
+	# num_sites = 1024
+	# apply_preprocess = True
+	# image_size = (512, 512)
+	# track_time = False
+
+	# ShapeNetRendering - dataset
+	# data_path = "/groups/asharf_group/ofirgila/ControlNet/training/ShapeNetRendering-3K_256_BNOT"
+	# num_sites = 256
+	# image_size = None
+	# track_time = False
+
+	# ShapeNetRenderingV2 - dataset
+	# data_path = r"/groups/asharf_group/ofirgila/ControlNet/training/ShapeNetRenderingV2-3K_576_BNOT"
+	# num_sites = 576
+	# image_size = (448, 448)
+	# apply_preprocess = True
+	# track_time = False
+
+	# AirplaneCarShip - dataset
+	# data_path = r"/groups/asharf_group/ofirgila/ControlNet/training/AirplaneCarShip-3K_1600_BNOT"
+	# num_sites = 1600
+	# image_size = (448, 448)
+	# apply_preprocess = True
+	# track_time = False
+
+	# ShapeNetRender_Custom - dataset
+	# data_path = r"/groups/asharf_group/ofirgila/ControlNet/training/ShapeNetRender_Custom-3K_1600_BNOT"
+	# num_sites = 1600
+	# image_size = None
+	# apply_preprocess = True
+	# track_time = False
 
 
 	# Quadratic Sample
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/quadratic_V2"
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/quadratic"
 	# num_sites = 1024
 	# track_time = False
+	# target_folder = f"target_BNOT_{num_sites}"
 
 	# Monkey Sample
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/monkey"
 	# num_sites = 1024
 	# track_time = False
+	# target_folder = f"target_BNOT_{num_sites}"
 
 	# Plant Sample
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/plant2"
 	# num_sites = 1024
 	# track_time = False
+	# target_folder = f"target_BNOT_{num_sites}"
+
+	# Spectral Analysis Set Sample
+	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/spectral_analysis"
+	num_sites = 1024
+	apply_preprocess = False
+	image_size = None
+	track_time = False
+	target_folder = f"target_BNOT_{num_sites}"
+	seed = -1
+	epsilon = 0.01
+	keep_stats = True
 
 
 	# Faces Set Sample
@@ -443,11 +574,13 @@ def main() -> int:
 	# image_size = (512, 512)
 	# num_sites = 1024
 	# track_time = False
+	# target_folder = f"target_BNOT_{num_sites}"
 
 	# Icons-50 - METRICS
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/quantitative_advance_metrics"
 	# num_sites = 1024
 	# track_time = False
+	# target_folder = f"target_BNOT_{num_sites}"
 
 	# Icons-50 - TIMES - V1
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
@@ -455,6 +588,7 @@ def main() -> int:
 	# num_sites = 1024
 	# num_sites = 2304
 	# image_size = (512, 512)
+	# target_folder = f"target_BNOT_{num_sites}"
 
 
 	parser = argparse.ArgumentParser(
@@ -464,14 +598,24 @@ def main() -> int:
 	parser.add_argument("--data_path", type=Path, default=data_path,
 						help="Dataset root containing a source/ folder")
 	parser.add_argument("--n", type=int, default=n, help="Number of images to process; -1 means all")
+	parser.add_argument("--target_folder", default=target_folder,
+		help="Output folder name under --data_path (e.g. target_BNOT_1024).")
 	parser.add_argument("--image_size", type=int, nargs=2, default=image_size,
 						metavar=("W", "H"), help="Resize images before inference; default keeps original size")
 	parser.add_argument("--num_sites", type=int, default=num_sites)
-	parser.add_argument("--seed", type=int, default=seed)
+	parser.add_argument("--seed", type=int, default=seed,
+		help="Site-initialization seed. -1 draws a fresh random seed per image "
+		     "(independent realizations); any other value is used for every image.")
 	parser.add_argument("--max_iters", type=int, default=max_iters)
 	parser.add_argument("--max_newton_iters", type=int, default=max_newton_iters)
+	parser.add_argument("--epsilon", type=float, default=epsilon,
+		help="Convergence tolerance scale; smaller runs the optimiser longer (default 1.0).")
 	parser.add_argument("--invert", action=argparse.BooleanOptionalAction, default=invert,
 						help="Invert the grayscale source before inference")
+	parser.add_argument("--apply_preprocess", action=argparse.BooleanOptionalAction, default=apply_preprocess,
+		help="Apply the GBN preprocessing pipeline to the source before stippling")
+	parser.add_argument("--disable_bg_suppression", action=argparse.BooleanOptionalAction, default=disable_bg_suppression,
+		help="Skip the background-suppression step of the preprocess")
 	parser.add_argument("--keep_pgm", action=argparse.BooleanOptionalAction, default=keep_pgm)
 	parser.add_argument("--keep_stats", action=argparse.BooleanOptionalAction, default=keep_stats)
 	parser.add_argument("--export_png", action=argparse.BooleanOptionalAction, default=export_png,
@@ -489,20 +633,33 @@ def main() -> int:
 
 	# NOTE: Build paths
 	data_path = args.data_path.expanduser().resolve()
+	ORIGINAL_PATH = os.path.join(data_path, "original")
 	SOURCE_PATH = os.path.join(data_path, "source")
-	TARGET_PATH = os.path.join(data_path, "target")
+	TARGET_PATH = os.path.join(data_path, args.target_folder)
 	JSON_PATH = os.path.join(data_path, "prompt.json")
 	TIMESTAMPS_PATH = os.path.join(data_path, "timestamps") if args.track_time else None
 
 	data_path = args.data_path.expanduser().resolve()
+	original_dir = Path(ORIGINAL_PATH)
 	source_dir = Path(SOURCE_PATH)
 	target_dir = Path(TARGET_PATH)
+	# Read inputs from original/ when present (like GBN/WVS), else source/.
+	# Reading from source/ means the images ARE the source: there is no original -> source
+	# step to perform, so preprocessing is forced off (running it would preprocess an
+	# already-preprocessed image) and process_one leaves source/ untouched (it already
+	# skips the copy when src and dst resolve to the same file).
+	use_original = original_dir.is_dir()
+	input_dir = original_dir if use_original else source_dir
+	if not use_original and args.apply_preprocess:
+		print("Note: no 'original/' folder -- reading from 'source/' and skipping "
+		      "--apply_preprocess (those images are already the source).", file=sys.stderr)
+		args.apply_preprocess = False
 	json_path = Path(JSON_PATH)
 	timestamps_dir = Path(TIMESTAMPS_PATH) if TIMESTAMPS_PATH else None
 
-	# Require source/ to exist.
-	if not source_dir.is_dir():
-		print(f"Error: 'source/' folder not found under: {data_path}", file=sys.stderr)
+	# Require an input folder (original/ preferred, else source/) to exist.
+	if not input_dir.is_dir():
+		print(f"Error: no 'original/' or 'source/' folder under: {data_path}", file=sys.stderr)
 		return 1
 
 	source_dir.mkdir(parents=True, exist_ok=True)
@@ -519,12 +676,12 @@ def main() -> int:
 
 	executable = find_default_executable(args.executable)
 
-	# Read images from source/ directory only (no fallback to original/).
+	# Read images from the input folder (original/ if present, else source/).
 	image_files = sorted(
-		[p.relative_to(source_dir) for p in source_dir.rglob("*") if p.is_file() and p.suffix.lower() in VALID_EXT]
+		[p.relative_to(input_dir) for p in input_dir.rglob("*") if p.is_file() and p.suffix.lower() in VALID_EXT]
 	)
 	if not image_files:
-		print(f"No images found under: {source_dir}", file=sys.stderr)
+		print(f"No images found under: {input_dir}", file=sys.stderr)
 		return 1
 
 	n = len(image_files) if args.n == -1 else min(args.n, len(image_files))
@@ -539,7 +696,7 @@ def main() -> int:
 	skipped = 0
 
 	for idx, rel_path in enumerate(image_files[:n], 1):
-		src_path = source_dir / rel_path
+		src_path = input_dir / rel_path
 		source_out = source_dir / rel_path.with_suffix(".png")
 		target_out_dir = target_dir / rel_path.parent
 		target_out_dir.mkdir(parents=True, exist_ok=True)
@@ -558,7 +715,11 @@ def main() -> int:
 			skipped += 1
 			continue
 
-		print(f"  [{idx}/{n}] Processing {rel_path.name}")
+		# seed < 0 -> a fresh random seed per image, so repeated realizations of the SAME input
+		# image differ (site initialization is BNOT's only source of randomness). Otherwise use
+		# the value as given, which is the historical constant-seed behaviour.
+		image_seed = random.randrange(1, 2**31 - 1) if args.seed < 0 else args.seed
+		print(f"  [{idx}/{n}] Processing {rel_path.name}" + (f" (seed {image_seed})" if args.seed < 0 else ""))
 		try:
 			status = process_one(
 				src_path,
@@ -567,12 +728,16 @@ def main() -> int:
 				executable=executable,
 				image_size=tuple(args.image_size) if args.image_size is not None else None,
 				invert=args.invert,
+				apply_preprocess=args.apply_preprocess,
+				disable_bg_suppression=args.disable_bg_suppression,
 				num_sites=args.num_sites,
-				seed=args.seed,
+				seed=image_seed,
 				max_iters=args.max_iters,
 				max_newton_iters=args.max_newton_iters,
+				epsilon=args.epsilon,
 				keep_pgm=args.keep_pgm,
 				keep_stats=args.keep_stats,
+				overwrite=args.overwrite,
 				track_time=args.track_time,
 				timestamps_dir=timestamps_dir,
 				rel_path=rel_path,
