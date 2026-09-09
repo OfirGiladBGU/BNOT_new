@@ -499,10 +499,10 @@ def main() -> int:
 	############################
 
 	# Icons-50 - dataset
-	# data_path = "/groups/asharf_group/ofirgila/ControlNet/training/Icons-50_1024_BNOT"
-	# num_sites = 1024
-	# image_size = (512, 512)
-	# track_time = False
+	data_path = "/groups/asharf_group/ofirgila/ControlNet/training/Icons-50_1024_BNOT"
+	num_sites = 1024
+	image_size = (512, 512)
+	track_time = False
 
 	# CelebA - dataset
 	# data_path = "/groups/asharf_group/ofirgila/ControlNet/training/CelebA-5K_1024_BNOT"
@@ -538,6 +538,14 @@ def main() -> int:
 	# apply_preprocess = True
 	# track_time = False
 
+	# ShapeNetRender_Custom - Airplanes
+	# data_path = r"/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/z_validation_data/ShapeNetRender_Custom-3K-Airplanes_1600"
+	# num_sites = 1600
+	# image_size = None
+	# apply_preprocess = True
+	# track_time = False
+	# target_folder = f"target_BNOT_{num_sites}"
+
 
 	# Quadratic Sample
 	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/images_results_metrics/quadratic"
@@ -557,38 +565,34 @@ def main() -> int:
 	# track_time = False
 	# target_folder = f"target_BNOT_{num_sites}"
 
+
 	# Spectral Analysis Set Sample
-	data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/spectral_analysis"
-	num_sites = 1024
-	apply_preprocess = False
-	image_size = None
-	track_time = False
-	target_folder = f"target_BNOT_{num_sites}"
-	seed = -1
-	epsilon = 0.01
-	keep_stats = True
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/spectral_analysis"
+	# num_sites = 1024
+	# image_size = None
+	# track_time = False
+	# target_folder = f"target_BNOT_{num_sites}"
+	# seed = -1
+	# epsilon = 0.01
+	# keep_stats = True
 
-
-	# Faces Set Sample
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/faces_results_compare"
-	# image_size = (512, 512)
+	# Icons-50 - Validation (Optional)
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/z_validation_data/Icons-50_1024"
 	# num_sites = 1024
 	# track_time = False
 	# target_folder = f"target_BNOT_{num_sites}"
 
-	# Icons-50 - METRICS
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/quantitative_advance_metrics"
+	# CelebA - Validation (Optional)
+	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/z_validation_data/CelebA-5K_1024"
 	# num_sites = 1024
 	# track_time = False
 	# target_folder = f"target_BNOT_{num_sites}"
 
-	# Icons-50 - TIMES - V1
-	# data_path = "/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/icons_results_runtimes"
-	# num_sites = 576
-	# num_sites = 1024
-	# num_sites = 2304
-	# image_size = (512, 512)
-	# target_folder = f"target_BNOT_{num_sites}"
+	# ShapeNetRender_Custom - Validation (Optional)
+    # data_path = r"/groups/asharf_group/ofirgila/ExampleBasedSamplingWithDiffusion/experiments/outputs/z_validation_data/ShapeNetRender_Custom-3K_1600"
+    # num_sites = 1600
+    # track_time = False
+    # target_folder = f"target_BNOT_{num_sites}"
 
 
 	parser = argparse.ArgumentParser(
